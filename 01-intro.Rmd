@@ -1,0 +1,15 @@
+# Introduction and motivation {#intro}
+
+The goal of this chapter is to provide an introduction to multiple
+changepoint detection algorithms, with an emphasis on methods that
+have free/open-source implementations in R [@R-base]. Changepoint
+detection algorithms are for analysis of sequential data sets.
+
+```{r data}
+data(neuroblastoma, package="neuroblastoma")
+
+```
+
+@Truong2018 provide an overview of the theoretical foundations for
+multiple changepoint detection.
+

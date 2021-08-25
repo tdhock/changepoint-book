@@ -1,0 +1,8 @@
+This is source code for a book (in progress) about changepoint
+detection algorithms in R.
+
+Preview via
+
+#+BEGIN_SRC R
+  bookdown::serve_book()
+#+END_SRC
