@@ -13,3 +13,28 @@ data(neuroblastoma, package="neuroblastoma")
 @Truong2018 provide an overview of the theoretical foundations for
 multiple changepoint detection.
 
+## Motivation for changepoint detection 
+
+Changepoint detection algorithms are useful in a variety of real-world
+applications.
+
+- Detecting changes/abnormalities important in medicine.
+
+![Electrocardiograms (heart monitoring), Fotoohinasab et al, Asilomar conference 2020.](intro-ecg)
+
+- Detecting the time when a spike occurs is important in neuroscience.
+
+![Neural spikes in calcium imaging data, Jewell et al, Biostatistics
+2019.](intro-neuroscience)
+
+- Detecting breakpoints is important in diagnosis of some types of
+  cancer, such as neuroblastoma.
+
+![DNA copy number data, breakpoints associated with aggressive cancer,
+Hocking et al, Bioinformatics 2014.](intro-breakpoints)
+
+- Detecting peaks (up/down changes) in genomic data is important in
+  order to understand which genes are active or inactive.
+
+![ChIP-seq data for characterizing active regions in the human genome, Hocking et al, Bioinformatics 2017.](intro-peaks)
+

@@ -6,3 +6,8 @@ Preview via
 #+BEGIN_SRC R
   bookdown::serve_book()
 #+END_SRC
+
+** 22 Sept 2021
+
+[[file:nb.binseg.opt.diff.R]] searches for neuroblastoma data sets for
+which binary segmentation is sub-optimal.
