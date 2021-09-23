@@ -25,6 +25,17 @@ one.dt <- nb.dt[profile.id==22 & chromosome==12]
 one.dt
 ```
 
+```{r}
+data(wave.c44137, package="changepoint")
+wave.dt <- data.table(height=wave.c44137)
+## The data are taken at hourly intervals from January 2005 until
+## September 2012.
+ggplot()+
+  geom_line(aes(
+    seq_along(height), height),
+    data=wave.dt)
+```
+
 ## Assume normal distribution with change in mean, constant variance
 
 - There are a certain number of clusters/segments
@@ -78,6 +89,8 @@ plotK <- function(k){
       color=model.color,
       data=k.segs)
 }
+plotK(5)
+
 plotK(1)
 ```
 
