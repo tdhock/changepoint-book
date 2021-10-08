@@ -204,7 +204,7 @@ loss of each possible split,
 ```{r}
 cum.data.vec <- c(0, cumsum(one.pid.chr[["logratio"]]))
 possible_splits <- function(seg.dt){
-  possible.dt <- seg.dt[, {
+  possible.dt <- seg.dt[full_seg_start<full_seg_end, {
     before_seg_end <- seq(full_seg_start, full_seg_end-1)
     data.table(
       before_seg_start=full_seg_start,
@@ -240,7 +240,8 @@ get_segs <- function(best){
     best,
     seg="before|after",
     "_seg_",
-    column="start|end|mean")
+    column="start|end|mean"
+  )[order(start)][, startChange := c(FALSE, TRUE)]
 }
 first.best.tall <- get_segs(first.best)
 ggplot()+
@@ -289,7 +290,10 @@ second.segs.dt <- rbind(
       on=c(start="full_seg_start", end="full_seg_end")]),
   data.table(
     computed="this step", second.best.tall))
-second.vlines <- second.segs.dt[start>1]
+get_vlines <- function(segs){
+  segs[start>1][startChange==FALSE, computed := "previously"]
+}
+second.vlines <- get_vlines(second.segs.dt)
 ggplot()+
   facet_grid(panel ~ ., scales="free")+
   scale_x_continuous(
@@ -332,9 +336,6 @@ split, and new splits.
   full_seg_start=start, full_seg_end=end)])
 third.possible <- possible_splits(third.segs)
 third.possible.show <- rbind(
-  ## data.table(
-  ##   computed="previously",
-  ##   second.possible[!second.best, on=c("full_seg_start", "full_seg_end")]),
   data.table(
     computed="previously",
     second.splits.dt[-second.best.i]),
@@ -359,6 +360,7 @@ third.segs.dt <- rbind(
     !third.best, on=c(start="full_seg_start", end="full_seg_end")
   ][, computed := "previously"],
   data.table(computed="this step", third.best.tall))
+third.vlines <- get_vlines(third.segs.dt)
 ggplot()+
   facet_grid(panel ~ ., scales="free")+
   scale_x_continuous(
@@ -373,9 +375,15 @@ ggplot()+
     shape=1,
     data=data.table(panel="loss", third.possible.show))+
   geom_vline(aes(
-    color=computed,
-    xintercept=start-0.5),
-    data=third.segs.dt[start>1])+
+    xintercept=start-0.5,
+    color=computed),
+    data=data.table(
+      panel="data",
+      third.vlines[computed=="previously"]))+
+  geom_vline(aes(
+    xintercept=start-0.5,
+    color=computed),
+    data=third.vlines[computed=="this step"])+
   geom_segment(aes(
     start-0.5, mean,
     color=computed,
@@ -383,6 +391,122 @@ ggplot()+
     size=2,
     alpha=0.5,
     data=data.table(panel="data", third.segs.dt))
+```
+
+The fourth step is similar,
+
+```{r}
+(fourth.segs <- third.best.tall[, .(
+  full_seg_start=start, full_seg_end=end)])
+fourth.possible <- possible_splits(fourth.segs)
+fourth.possible.show <- rbind(
+  data.table(
+    computed="previously",
+    third.splits.dt[-third.best.i]),
+  data.table(
+    computed="this step", fourth.possible))
+(fourth.splits.dt <- rbind(
+  third.splits.dt[-third.best.i],
+  fourth.possible[, {
+    .SD[which.min(loss_diff)]
+  }, by=.(full_seg_start, full_seg_end)]))
+fourth.best.i <- fourth.splits.dt[, which.min(loss_diff)]
+fourth.best <- fourth.splits.dt[fourth.best.i]
+fourth.best.tall <- get_segs(fourth.best)
+fourth.segs.dt <- rbind(
+  third.segs.dt[
+    !fourth.best, on=c(start="full_seg_start", end="full_seg_end")
+  ][, computed := "previously"],
+  data.table(computed="this step", fourth.best.tall))
+fourth.vlines <- get_vlines(fourth.segs.dt)
+ggplot()+
+  facet_grid(panel ~ ., scales="free")+
+  scale_x_continuous(
+    limits=c(0, nrow(one.pid.chr)+1))+
+  scale_y_continuous(
+    "logratio (noisy copy number measurement)")+
+  geom_point(aes(
+    data.i, logratio),
+    data=data.table(panel="data", one.pid.chr))+
+  geom_point(aes(
+    before_seg_end+0.5, loss_diff, color=computed),
+    shape=1,
+    data=data.table(panel="loss", fourth.possible.show))+
+  geom_vline(aes(
+    xintercept=start-0.5,
+    color=computed),
+    data=data.table(
+      panel="data",
+      fourth.vlines[computed=="previously"]))+
+  geom_vline(aes(
+    xintercept=start-0.5,
+    color=computed),
+    data=fourth.vlines[computed=="this step"])+
+  geom_segment(aes(
+    start-0.5, mean,
+    color=computed,
+    xend=end+0.5, yend=mean),
+    size=2,
+    alpha=0.5,
+    data=data.table(panel="data", fourth.segs.dt))
+```
+
+The fifth step is similar,
+
+```{r}
+(fifth.segs <- fourth.best.tall[, .(
+  full_seg_start=start, full_seg_end=end)])
+(fifth.possible <- possible_splits(fifth.segs))
+fifth.possible.show <- rbind(
+  data.table(
+    computed="previously",
+    fourth.splits.dt[-fourth.best.i]),
+  data.table(
+    computed="this step", fifth.possible))
+(fifth.splits.dt <- rbind(
+  fourth.splits.dt[-fourth.best.i],
+  fifth.possible[, {
+    .SD[which.min(loss_diff)]
+  }, by=.(full_seg_start, full_seg_end)]))
+fifth.best.i <- fifth.splits.dt[, which.min(loss_diff)]
+fifth.best <- fifth.splits.dt[fifth.best.i]
+fifth.best.tall <- get_segs(fifth.best)
+fifth.segs.dt <- rbind(
+  fourth.segs.dt[
+    !fifth.best, on=c(start="full_seg_start", end="full_seg_end")
+  ][, computed := "previously"],
+  data.table(computed="this step", fifth.best.tall))
+fifth.vlines <- get_vlines(fifth.segs.dt)
+ggplot()+
+  facet_grid(panel ~ ., scales="free")+
+  scale_x_continuous(
+    limits=c(0, nrow(one.pid.chr)+1))+
+  scale_y_continuous(
+    "logratio (noisy copy number measurement)")+
+  geom_point(aes(
+    data.i, logratio),
+    data=data.table(panel="data", one.pid.chr))+
+  geom_point(aes(
+    before_seg_end+0.5, loss_diff, color=computed),
+    shape=1,
+    data=data.table(panel="loss", fifth.possible.show))+
+  geom_vline(aes(
+    xintercept=start-0.5,
+    color=computed),
+    data=data.table(
+      panel="data",
+      fifth.vlines[computed=="previously"]))+
+  geom_vline(aes(
+    xintercept=start-0.5,
+    color=computed),
+    data=fifth.vlines[computed=="this step"])+
+  geom_segment(aes(
+    start-0.5, mean,
+    color=computed,
+    xend=end+0.5, yend=mean),
+    size=2,
+    alpha=0.5,
+    data=data.table(panel="data", fifth.segs.dt))
 ```
 
 ## Other distributional assumptions
