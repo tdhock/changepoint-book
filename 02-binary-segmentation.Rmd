@@ -63,6 +63,7 @@ gg <- ggplot()+
     "logratio (noisy copy number measurement)")+
   geom_point(aes(
     data.i, logratio),
+    shape=21,
     data=one.pid.chr)
 gg
 ```
@@ -84,7 +85,7 @@ max.segments <- 5
 bs.models <- binsegRcpp::binseg_normal(
   one.pid.chr[["logratio"]],
   max.segments)
-model.color <- "blue"
+model.color <- "red"
 k.segs <- coef(bs.models)
 gg+
   geom_vline(aes(
@@ -124,27 +125,6 @@ gg+
   facet_grid(segments ~ ., labeller=label_both)
 ```
 
-Another way to run it is via the code below (which gives different
-results from the two methods above, why?)
-
-```{r}
-cp.models.default <- changepoint::cpt.mean(
-  one.pid.chr[["logratio"]],
-  method="BinSeg",
-  Q=max.segments-1)
-(cpt.mat <- changepoint::cpts.full(cp.models.default))
-seg.dt <- data.table(
-  segments=as.integer(row(cpt.mat)+1),
-  end=as.integer(cpt.mat)
-)[!is.na(end)]
-gg+
-  geom_vline(aes(
-    xintercept=end+0.5),
-    color=model.color,
-    data=seg.dt)+
-  facet_grid(segments ~ ., labeller=label_both)
-```
-
 Finally we can also use the BinSeg package,
 
 ```{r}
@@ -171,13 +151,49 @@ gg+
 
 Why the difference between BinSeg and binsegRcpp? It seems that the
 loss is the same until the fifth segment model, for which binsegRcpp
-has smaller loss. Maybe BinSeg is not allowing segments witha single
-data point?
+has smaller loss. Maybe BinSeg is not allowing segments with a single
+data point? (minseglen=1 for both BinSeg and changepoint, so this does
+not seem to explain the difference)
+
 
 ```{r}
-rbind(
-  binsegRcpp=bs.models$loss*2,
-  BinSeg=BS.models@models_summary$cost)
+cum.vec <- cumsum(c(0,one.pid.chr$logratio))
+for(k in 2:5){
+  end.mat <- rbind(
+    manual=c(sort(cp.models.manual@cpts.full[k-1,]), nrow(one.pid.chr)),
+    BinSeg=BinSeg::coef(BS.models, k)$end,
+    binsegRcpp=coef(bs.models, k)$end)
+  print(cbind(end.mat, loss=apply(end.mat, 1, function(end){
+    seg.size <- diff(c(0,end))
+    seg.mean <- (cum.vec[end+1]-cum.vec[end-seg.size+1])/seg.size
+    data.mean <- rep(seg.mean, seg.size)
+    sum((data.mean-one.pid.chr$logratio)^2)
+  }), segments=k))
+}
+```
+
+## Another sequence of models
+
+Another way to run it is via the code below, which gives different
+results from the methods above, because it uses the MBIC penalty.
+
+```{r}
+cp.models.default <- changepoint::cpt.mean(
+  one.pid.chr[["logratio"]],
+  method="BinSeg",
+  penalty="MBIC",
+  Q=max.segments-1)
+(cpt.mat <- changepoint::cpts.full(cp.models.default))
+seg.dt <- data.table(
+  segments=as.integer(row(cpt.mat)+1),
+  end=as.integer(cpt.mat)
+)[!is.na(end)]
+gg+
+  geom_vline(aes(
+    xintercept=end+0.5),
+    color=model.color,
+    data=seg.dt)+
+  facet_grid(segments ~ ., labeller=label_both)
 ```
 
 ## Implementing and visualizing binary segmentation in R
@@ -192,9 +208,7 @@ segment that could be split. Initially this table has only one row
 corresponding to the full data set,
 
 ```{r}
-(first.seg.dt <- data.table(
-  full_seg_start=1L,
-  full_seg_end=nrow(one.pid.chr)))
+bs.initial <- list(to.split=data.table(start=1L, end=nrow(one.pid.chr)))
 ```
 
 The column names in the table above refer to the full segment on which
@@ -202,9 +216,10 @@ we want to search for the split point. The next step is to compute the
 loss of each possible split,
 
 ```{r}
-cum.data.vec <- c(0, cumsum(one.pid.chr[["logratio"]]))
 possible_splits <- function(seg.dt){
-  possible.dt <- seg.dt[full_seg_start<full_seg_end, {
+  some.segs <- seg.dt[full_seg_start<full_seg_end]
+  if(nrow(some.segs)==0)return(NULL)
+  possible.dt <- some.segs[, {
     before_seg_end <- seq(full_seg_start, full_seg_end-1)
     data.table(
       before_seg_start=full_seg_start,
@@ -233,8 +248,6 @@ possible_splits <- function(seg.dt){
   , split_loss := before_seg_loss + after_seg_loss][
   , loss_diff := split_loss-full_seg_loss][]
 }
-first.possible <- possible_splits(first.seg.dt)
-(first.best <- first.possible[which.min(loss_diff)])
 get_segs <- function(best){
   nc::capture_melt_multiple(
     best,
@@ -243,270 +256,105 @@ get_segs <- function(best){
     column="start|end|mean"
   )[order(start)][, startChange := c(FALSE, TRUE)]
 }
-first.best.tall <- get_segs(first.best)
-ggplot()+
-  facet_grid(panel ~ ., scales="free")+
-  scale_x_continuous(
-    limits=c(0, nrow(one.pid.chr)+1))+
-  scale_y_continuous(
-    "logratio (noisy copy number measurement)")+
-  geom_point(aes(
-    data.i, logratio),
-    data=data.table(panel="data", one.pid.chr))+
-  geom_point(aes(
-    before_seg_end+0.5, loss_diff),
-    shape=1,
-    data=data.table(panel="loss", first.possible))+
-  geom_vline(aes(
-    xintercept=before_seg_end+0.5),
-    data=first.best,
-    color=model.color)+
-  geom_segment(aes(
-    start-0.5, mean,
-    xend=end+0.5, yend=mean),
-    color=model.color,
-    size=2,
-    alpha=0.5,
-    data=data.table(panel="data", first.best.tall))
-```
-
-The second split point is computed in almost the same way,
-
-```{r}
-(second.segs <- first.best.tall[, .(
-  full_seg_start=start, full_seg_end=end)])
-second.possible <- possible_splits(second.segs)
-second.splits.dt <- second.possible[, {
-  .SD[which.min(loss_diff)]
-}, by=.(full_seg_start, full_seg_end)]
-second.best.i <- second.splits.dt[, which.min(loss_diff)]
-second.best <- second.splits.dt[second.best.i]
-second.best.tall <- get_segs(second.best)
-second.segs.dt <- rbind(
-  data.table(
-    computed="previously",
-    first.best.tall[
-      !second.best,
-      on=c(start="full_seg_start", end="full_seg_end")]),
-  data.table(
-    computed="this step", second.best.tall))
 get_vlines <- function(segs){
   segs[start>1][startChange==FALSE, computed := "previously"]
 }
-second.vlines <- get_vlines(second.segs.dt)
-ggplot()+
-  facet_grid(panel ~ ., scales="free")+
-  scale_x_continuous(
-    limits=c(0, nrow(one.pid.chr)+1))+
-  scale_y_continuous(
-    "logratio (noisy copy number measurement)")+
-  geom_point(aes(
-    data.i, logratio),
-    data=data.table(panel="data", one.pid.chr))+
-  geom_point(aes(
-    before_seg_end+0.5, loss_diff,
-    color=computed),
-    shape=1,
-    data=data.table(
-      panel="loss", computed="this step", second.possible))+
+next.split <- function(prev){
+  (it.segs <- prev$to.split[, .(
+    full_seg_start=start, full_seg_end=end)])
+  (it.possible <- possible_splits(it.segs))
+  prev.not.best <- if(!is.null(prev$best.split)){
+    prev$splits[-prev$best.split]
+  }
+  it.possible.show <- rbind(
+    if(is.data.table(prev.not.best) && nrow(prev.not.best))data.table(
+      computed="previously", prev.not.best),
+    if(!is.null(it.possible))data.table(
+      computed="this step", it.possible))
+  (it.splits.dt <- rbind(
+    if(!is.null(prev$best.split))prev.not.best,
+    if(!is.null(it.possible))it.possible[, {
+      .SD[which.min(loss_diff)]
+    }, by=.(full_seg_start, full_seg_end)]))
+  it.best.i <- which.min(it.splits.dt$loss_diff)
+  it.best <- it.splits.dt[it.best.i]
+  it.best.tall <- get_segs(it.best)
+  it.segs.dt <- rbind(
+    if(!is.null(prev$best.split))prev$segments[
+      !it.best, on=c(start="full_seg_start", end="full_seg_end")
+    ][, computed := "previously"],
+    data.table(computed="this step", it.best.tall))
+  list(
+    to.split=it.best.tall[, .(start, end)],#prev.best.tall
+    segments=it.segs.dt,  #prev.segs.dt
+    splits=it.splits.dt,  #prev.splits.dt
+    possible=it.possible.show[, .(before_seg_end, loss_diff, computed)],
+    best.split=it.best.i) #prev.best.i
+}
+plot.split <- function(it){
+  it.vlines <- get_vlines(it$segments)
+  computed.colors <- c(
+    "this step"="red",
+    "previously"="deepskyblue")
+  prev.vlines <- it.vlines[computed=="previously"]
+  gg <- ggplot()+
+    ggtitle(sprintf(
+      "Need to compute cost of %d new split(s) to find change #%d in %d data",
+      it$possible[, sum(computed=="this step")],
+      nrow(it$segments)-1,
+      nrow(one.pid.chr)))+
+    facet_grid(panel ~ ., scales="free")+
+    scale_color_manual(
+      values=computed.colors,
+      drop=FALSE,
+      breaks=names(computed.colors))+
+    scale_x_continuous(
+      "data.i (position/index in data sequence)",
+      limits=c(0, nrow(one.pid.chr)+1))+
+    scale_y_continuous(
+      "",
+      labels=scales::scientific)+
+    geom_point(aes(
+      data.i, logratio),
+      shape=21,
+      data=data.table(panel="data", one.pid.chr))+
+    geom_point(aes(
+      before_seg_end+0.5, loss_diff, color=computed),
+      shape=1,
+      data=data.table(panel="loss difference", it$possible))+
+    geom_vline(aes(
+      xintercept=start-0.5,
+      color=computed),
+      data=it.vlines[computed=="this step"])+
+    geom_segment(aes(
+      start-0.5, mean,
+      color=computed,
+      xend=end+0.5, yend=mean),
+      size=2,
+      alpha=0.5,
+      data=data.table(panel="data", it$segments))
+  if(nrow(prev.vlines)){
+    gg <- gg+
   geom_vline(aes(
     xintercept=start-0.5,
     color=computed),
     data=data.table(
       panel="data",
-      second.vlines[computed=="previously"]))+
-  geom_vline(aes(
-    xintercept=start-0.5,
-    color=computed),
-    data=second.vlines[computed=="this step"])+
-  geom_segment(aes(
-    start-0.5, mean,
-    color=computed,
-    xend=end+0.5, yend=mean),
-    size=2,
-    alpha=0.5,
-    data=data.table(panel="data", second.segs.dt))
-```
+      prev.vlines
+    ))
+  }
+  gg
+}
 
-Then for the third step we need to minimize over previously computed
-split, and new splits.
+bs.iterations <- list(bs.initial)
+for(n.segments in 2:nrow(one.pid.chr)){
+  bs.iterations[[n.segments]] <- next.split(bs.iterations[[n.segments-1]])
+}
 
-```{r}
-(third.segs <- second.best.tall[, .(
-  full_seg_start=start, full_seg_end=end)])
-third.possible <- possible_splits(third.segs)
-third.possible.show <- rbind(
-  data.table(
-    computed="previously",
-    second.splits.dt[-second.best.i]),
-  data.table(
-    computed="this step", third.possible))
-(third.splits.dt <- rbind(
-  second.splits.dt[-second.best.i],
-  third.possible[, {
-    .SD[which.min(loss_diff)]
-  }, by=.(full_seg_start, full_seg_end)]))
-```
+plot.split(bs.iterations[[2]])
+plot.split(bs.iterations[[3]])
+plot.split(bs.iterations[[4]])
 
-The code above combines the previously unchosen split from the second
-step, with the two new splits from the third step. 
-
-```{r}
-third.best.i <- third.splits.dt[, which.min(loss_diff)]
-third.best <- third.splits.dt[third.best.i]
-third.best.tall <- get_segs(third.best)
-third.segs.dt <- rbind(
-  second.segs.dt[
-    !third.best, on=c(start="full_seg_start", end="full_seg_end")
-  ][, computed := "previously"],
-  data.table(computed="this step", third.best.tall))
-third.vlines <- get_vlines(third.segs.dt)
-ggplot()+
-  facet_grid(panel ~ ., scales="free")+
-  scale_x_continuous(
-    limits=c(0, nrow(one.pid.chr)+1))+
-  scale_y_continuous(
-    "logratio (noisy copy number measurement)")+
-  geom_point(aes(
-    data.i, logratio),
-    data=data.table(panel="data", one.pid.chr))+
-  geom_point(aes(
-    before_seg_end+0.5, loss_diff, color=computed),
-    shape=1,
-    data=data.table(panel="loss", third.possible.show))+
-  geom_vline(aes(
-    xintercept=start-0.5,
-    color=computed),
-    data=data.table(
-      panel="data",
-      third.vlines[computed=="previously"]))+
-  geom_vline(aes(
-    xintercept=start-0.5,
-    color=computed),
-    data=third.vlines[computed=="this step"])+
-  geom_segment(aes(
-    start-0.5, mean,
-    color=computed,
-    xend=end+0.5, yend=mean),
-    size=2,
-    alpha=0.5,
-    data=data.table(panel="data", third.segs.dt))
-```
-
-The fourth step is similar,
-
-```{r}
-(fourth.segs <- third.best.tall[, .(
-  full_seg_start=start, full_seg_end=end)])
-fourth.possible <- possible_splits(fourth.segs)
-fourth.possible.show <- rbind(
-  data.table(
-    computed="previously",
-    third.splits.dt[-third.best.i]),
-  data.table(
-    computed="this step", fourth.possible))
-(fourth.splits.dt <- rbind(
-  third.splits.dt[-third.best.i],
-  fourth.possible[, {
-    .SD[which.min(loss_diff)]
-  }, by=.(full_seg_start, full_seg_end)]))
-fourth.best.i <- fourth.splits.dt[, which.min(loss_diff)]
-fourth.best <- fourth.splits.dt[fourth.best.i]
-fourth.best.tall <- get_segs(fourth.best)
-fourth.segs.dt <- rbind(
-  third.segs.dt[
-    !fourth.best, on=c(start="full_seg_start", end="full_seg_end")
-  ][, computed := "previously"],
-  data.table(computed="this step", fourth.best.tall))
-fourth.vlines <- get_vlines(fourth.segs.dt)
-ggplot()+
-  facet_grid(panel ~ ., scales="free")+
-  scale_x_continuous(
-    limits=c(0, nrow(one.pid.chr)+1))+
-  scale_y_continuous(
-    "logratio (noisy copy number measurement)")+
-  geom_point(aes(
-    data.i, logratio),
-    data=data.table(panel="data", one.pid.chr))+
-  geom_point(aes(
-    before_seg_end+0.5, loss_diff, color=computed),
-    shape=1,
-    data=data.table(panel="loss", fourth.possible.show))+
-  geom_vline(aes(
-    xintercept=start-0.5,
-    color=computed),
-    data=data.table(
-      panel="data",
-      fourth.vlines[computed=="previously"]))+
-  geom_vline(aes(
-    xintercept=start-0.5,
-    color=computed),
-    data=fourth.vlines[computed=="this step"])+
-  geom_segment(aes(
-    start-0.5, mean,
-    color=computed,
-    xend=end+0.5, yend=mean),
-    size=2,
-    alpha=0.5,
-    data=data.table(panel="data", fourth.segs.dt))
-```
-
-The fifth step is similar,
-
-```{r}
-(fifth.segs <- fourth.best.tall[, .(
-  full_seg_start=start, full_seg_end=end)])
-(fifth.possible <- possible_splits(fifth.segs))
-fifth.possible.show <- rbind(
-  data.table(
-    computed="previously",
-    fourth.splits.dt[-fourth.best.i]),
-  data.table(
-    computed="this step", fifth.possible))
-(fifth.splits.dt <- rbind(
-  fourth.splits.dt[-fourth.best.i],
-  fifth.possible[, {
-    .SD[which.min(loss_diff)]
-  }, by=.(full_seg_start, full_seg_end)]))
-fifth.best.i <- fifth.splits.dt[, which.min(loss_diff)]
-fifth.best <- fifth.splits.dt[fifth.best.i]
-fifth.best.tall <- get_segs(fifth.best)
-fifth.segs.dt <- rbind(
-  fourth.segs.dt[
-    !fifth.best, on=c(start="full_seg_start", end="full_seg_end")
-  ][, computed := "previously"],
-  data.table(computed="this step", fifth.best.tall))
-fifth.vlines <- get_vlines(fifth.segs.dt)
-ggplot()+
-  facet_grid(panel ~ ., scales="free")+
-  scale_x_continuous(
-    limits=c(0, nrow(one.pid.chr)+1))+
-  scale_y_continuous(
-    "logratio (noisy copy number measurement)")+
-  geom_point(aes(
-    data.i, logratio),
-    data=data.table(panel="data", one.pid.chr))+
-  geom_point(aes(
-    before_seg_end+0.5, loss_diff, color=computed),
-    shape=1,
-    data=data.table(panel="loss", fifth.possible.show))+
-  geom_vline(aes(
-    xintercept=start-0.5,
-    color=computed),
-    data=data.table(
-      panel="data",
-      fifth.vlines[computed=="previously"]))+
-  geom_vline(aes(
-    xintercept=start-0.5,
-    color=computed),
-    data=fifth.vlines[computed=="this step"])+
-  geom_segment(aes(
-    start-0.5, mean,
-    color=computed,
-    xend=end+0.5, yend=mean),
-    size=2,
-    alpha=0.5,
-    data=data.table(panel="data", fifth.segs.dt))
 ```
 
 ## Other distributional assumptions
