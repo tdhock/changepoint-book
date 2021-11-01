@@ -22,7 +22,7 @@ good approximation of the optimal changepoints.
 
 ```{r opts, echo=FALSE}
 knitr::opts_chunk$set(
-  echo=FALSE, results=FALSE,
+  echo=TRUE, results=TRUE,
   fig.width=10,
   fig.height=6)
 ```
@@ -149,15 +149,19 @@ gg+
   facet_grid(segments ~ ., labeller=label_both)
 ```
 
+## Different results
+
 Why the difference between BinSeg and binsegRcpp? It seems that the
 loss is the same until the fifth segment model, for which binsegRcpp
-has smaller loss. Maybe BinSeg is not allowing segments with a single
-data point? (minseglen=1 for both BinSeg and changepoint, so this does
-not seem to explain the difference)
+has smaller loss. Since the loss for binsegRcpp agrees with the
+manually computed loss below, I assume binsegRcpp is correct. Maybe
+BinSeg/changepoint are not allowing segments with a single data point?
+(but minseglen=1 for both BinSeg and changepoint, so this does not
+seem to explain the difference)
 
 
 ```{r}
-cum.vec <- cumsum(c(0,one.pid.chr$logratio))
+cum.data.vec <- cumsum(c(0,one.pid.chr$logratio))
 for(k in 2:5){
   end.mat <- rbind(
     manual=c(sort(cp.models.manual@cpts.full[k-1,]), nrow(one.pid.chr)),
@@ -165,12 +169,16 @@ for(k in 2:5){
     binsegRcpp=coef(bs.models, k)$end)
   print(cbind(end.mat, loss=apply(end.mat, 1, function(end){
     seg.size <- diff(c(0,end))
-    seg.mean <- (cum.vec[end+1]-cum.vec[end-seg.size+1])/seg.size
+    seg.mean <- (cum.data.vec[end+1]-cum.data.vec[end-seg.size+1])/seg.size
     data.mean <- rep(seg.mean, seg.size)
     sum((data.mean-one.pid.chr$logratio)^2)
   }), segments=k))
 }
 ```
+
+Note above that the three packages give the same result up to 4
+segments, then for 5 segments we see that binsegRcpp is different from
+the two others.
 
 ## Another sequence of models
 
