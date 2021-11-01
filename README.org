@@ -4,7 +4,8 @@ detection algorithms in R.
 Preview via
 
 #+BEGIN_SRC R
-  bookdown::serve_book()
+  bookdown::serve_book() #all chapters.
+  rmarkdown::render("02-binary-segmentation.Rmd", "pdf_document") #single file.
 #+END_SRC
 
 ** 22 Sept 2021
