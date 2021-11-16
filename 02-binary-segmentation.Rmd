@@ -365,6 +365,14 @@ plot.split(bs.iterations[[4]])
 
 ```
 
+## Comparison with wbs::sbs
+
+```{r}
+x <- c(0, 0.1, 1, 1.1, 0, 0.1, 1, 1.1)
+fit <- wbs::sbs(x)
+data.table(fit$res)[order(-min.th, scale)]
+```
+
 ## Other distributional assumptions
 
 Above we have mainly discussed the normal model with change in mean
