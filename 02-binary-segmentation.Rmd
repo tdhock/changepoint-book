@@ -264,9 +264,6 @@ get_segs <- function(best){
     column="start|end|mean"
   )[order(start)][, startChange := c(FALSE, TRUE)]
 }
-get_vlines <- function(segs){
-  segs[start>1][startChange==FALSE, computed := "previously"]
-}
 next.split <- function(prev){
   (it.segs <- prev$to.split[, .(
     full_seg_start=start, full_seg_end=end)])
@@ -299,8 +296,15 @@ next.split <- function(prev){
     possible=it.possible.show[, .(before_seg_end, loss_diff, computed)],
     best.split=it.best.i) #prev.best.i
 }
+bs.iterations <- list(bs.initial)
+for(n.segments in 2:nrow(one.pid.chr)){
+  bs.iterations[[n.segments]] <- next.split(bs.iterations[[n.segments-1]])
+}
+```
+
+```{r}
 plot.split <- function(it){
-  it.vlines <- get_vlines(it$segments)
+  it.vlines <- it$segments[start>1][startChange==FALSE, computed := "previously"]
   computed.colors <- c(
     "this step"="red",
     "previously"="deepskyblue")
@@ -352,11 +356,6 @@ plot.split <- function(it){
     ))
   }
   gg
-}
-
-bs.iterations <- list(bs.initial)
-for(n.segments in 2:nrow(one.pid.chr)){
-  bs.iterations[[n.segments]] <- next.split(bs.iterations[[n.segments-1]])
 }
 
 plot.split(bs.iterations[[2]])
