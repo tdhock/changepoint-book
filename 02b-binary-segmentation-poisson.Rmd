@@ -1,0 +1,352 @@
+# Binary segmentation
+
+In this chapter we will discuss the binary segmentation algorithm,
+which is perhaps the most popular classical heuristic for changepoint
+detection. For a sequence of N data, binary segmentation defines a
+regularization path of models from 1 to N segments. Starting with the
+simplest model with just one segment (no changepoints), the binary
+segmentation algorithm recursively performs the following computations:
+- for each segment, compute the loss for all new changepoints that are
+  possible on this segment. Store the best/min loss for this segment
+  along with the optimal split point.
+- Split the current segment which has the best/min loss.
+
+Binary segmentation therefore defines a hierarchical sequence of
+splits: the model with K changepoints contains all of the changepoints
+in the previous model with K-1 changepoints. Therefore binary
+segmentation may compute a sub-optimal set of changepoints (for
+$S\in\{3,\dots,N-1\}$ segments), which is why it is a
+heuristic. Nevertheless, binary segmentation is an interesting and
+useful algorithm, because it is very fast, and can often compute a
+good approximation of the optimal changepoints.
+
+```{r opts, echo=FALSE}
+knitr::opts_chunk$set(
+  echo=TRUE, results=TRUE,
+  fig.width=10,
+  fig.height=6)
+```
+
+## Segmentation / changepoint detection framework
+
+- Let $x_1, \dots, x_n \in\mathbb R$ be a data sequence
+  over space or time (logratio column in DNA copy number data below).
+- Where are the abrupt changes in the data sequence?
+- There are a certain number of clusters/segments
+  $K\in\{1,\dots, n\}$.
+- Each segment $k\in\{1,\dots,K\}$ has its own mean
+  parameter $\mu_k\in\mathbb R$.
+- There is some constant variance parameter $\sigma^2>0$ which is
+  common to all segments.
+- For each data point $i$ on segment
+  $k\in\{1,\dots,K\}$ we have $x_i \sim N(\mu_k, \sigma^2)$ -- normal
+  distribution.
+- This normal distribution assumption means that we want to find
+  segments/changepoints with mean $m$ that minimize the square loss,
+  $(x-m)^2$.
+- Other distributional assumptions / loss functions are possible.
+
+```{r results=TRUE}
+data(Mono27ac,package="PeakSegDisk")
+library(data.table)
+count.dt <- data.table(Mono27ac[["coverage"]])
+library(ggplot2)
+count.dt[, position := 1:.N]
+gg <- ggplot()+
+  geom_point(aes(
+    position, count),
+    data=count.dt)
+gg
+```
+
+## Computing the binary segmentation model using R packages
+
+In this section we explain how to use various R packages which
+implement binary segmentation.
+
+- changepoint: implements many more statistical models.
+- BinSeg: implements most of the same models as in changepoint.
+
+The `changepoint::cpt.mean` function implements the algorithm via
+the code below
+
+```{r}
+max.segments <- 10
+cp.models.manual <- changepoint::cpt.meanvar(
+  count.dt[["count"]],
+  method="BinSeg",
+  penalty="Manual",
+  pen.value=0,
+  test.stat="Poisson",
+  Q=max.segments-1)
+(cpt.mat <- changepoint::cpts.full(cp.models.manual))
+seg.dt <- data.table(
+  segments=as.integer(row(cpt.mat)+1),
+  end=as.integer(cpt.mat)
+)[!is.na(end)]
+model.color <- "green"
+gg+
+  geom_vline(aes(
+    xintercept=end+0.5),
+    color=model.color,
+    data=seg.dt)+
+  facet_grid(segments ~ ., labeller=label_both)
+```
+
+Finally we can also use the BinSeg package,
+
+```{r}
+BS.models <- BinSeg::BinSegModel(
+  count.dt[["count"]],
+  algorithm="BS",
+  distribution="poisson",
+  numCpts=max.segments-1,
+  minSegLen=2)
+k.segs <- BinSeg::coef(BS.models)
+gg+
+  geom_vline(aes(
+    xintercept=start-0.5),
+    color=model.color,
+    data=k.segs[start>1])+
+  geom_segment(aes(
+    start-0.5, mean,
+    xend=end+0.5, yend=mean),
+    size=2,
+    alpha=0.5,
+    color=model.color,
+    data=k.segs)+
+  facet_grid(segments ~ ., labeller=label_both)
+```
+
+## Different results
+
+Why the difference between BinSeg and binsegRcpp? It seems that the
+loss is the same until the fifth segment model, for which binsegRcpp
+has smaller loss. Since the loss for binsegRcpp agrees with the
+manually computed loss below, I assume binsegRcpp is correct. Maybe
+BinSeg/changepoint are not allowing segments with a single data point?
+(but minseglen=1 for both BinSeg and changepoint, so this does not
+seem to explain the difference)
+
+
+```{r}
+cum.data.vec <- cumsum(c(0,count.dt[["count"]]))
+for(k in 2:5){
+  end.mat <- rbind(
+    manual=c(sort(cp.models.manual@cpts.full[k-1,]), nrow(count.dt)),
+    BinSeg=BinSeg::coef(BS.models, k)$end)
+  print(cbind(end.mat, loss=apply(end.mat, 1, function(end){
+    seg.size <- diff(c(0,end))
+    seg.mean <- (cum.data.vec[end+1]-cum.data.vec[end-seg.size+1])/seg.size
+    data.mean <- rep(seg.mean, seg.size)
+    sum(data.mean-count.dt[["count"]]*log(data.mean))
+  }), segments=k))
+}
+```
+
+Note above that the three packages give the same result up to 4
+segments, then for 5 segments we see that binsegRcpp is different from
+the two others.
+
+## Implementing and visualizing binary segmentation in R
+
+In this section we provide a pure R implementation of binary
+segmentation, for the purposes of explaining how it works.
+
+The main idea of the algorithm is to keep a list of segments that
+could be split, and then choose the split with minimal loss. To keep
+track of the segments we can use a data table with one row for each
+segment that could be split. Initially this table has only one row
+corresponding to the full data set,
+
+```{r}
+bs.initial <- list(to.split=data.table(start=1L, end=nrow(count.dt)))
+```
+
+The column names in the table above refer to the full segment on which
+we want to search for the split point. The next step is to compute the
+loss of each possible split,
+
+```{r}
+possible_splits <- function(seg.dt){
+  some.segs <- seg.dt[full_seg_start<full_seg_end]
+  if(nrow(some.segs)==0)return(NULL)
+  possible.dt <- some.segs[, {
+    before_seg_end <- seq(full_seg_start, full_seg_end-1)
+    data.table(
+      before_seg_start=full_seg_start,
+      before_seg_end,
+      after_seg_start=before_seg_end+1L,
+      after_seg_end=full_seg_end
+    )
+  }, by=.(full_seg_start, full_seg_end)]
+  name <- function(suffix)paste0(seg_name, "_seg_", suffix)
+  value <- function(suffix)possible.dt[[name(suffix)]]
+  for(seg_name in c("before", "after", "full")){
+    end <- value("end")
+    start <- value("start")
+    N.data <- end-start+1
+    sum.data <- cum.data.vec[end+1]-cum.data.vec[start]
+    mean.data <- sum.data/N.data
+    set(
+      possible.dt,
+      j=name("loss"),
+      value=-sum.data^2/N.data)
+    set(
+      possible.dt,
+      j=name("mean"),
+      value=sum.data/N.data)
+  }
+  possible.dt[
+  , split_loss := before_seg_loss + after_seg_loss][
+  , loss_diff := split_loss-full_seg_loss][]
+}
+get_segs <- function(best){
+  nc::capture_melt_multiple(
+    best,
+    seg="before|after",
+    "_seg_",
+    column="start|end|mean"
+  )[order(start)][, startChange := c(FALSE, TRUE)]
+}
+get_vlines <- function(segs){
+  segs[start>1][startChange==FALSE, computed := "previously"]
+}
+next.split <- function(prev){
+  (it.segs <- prev$to.split[, .(
+    full_seg_start=start, full_seg_end=end)])
+  (it.possible <- possible_splits(it.segs))
+  prev.not.best <- if(!is.null(prev$best.split)){
+    prev$splits[-prev$best.split]
+  }
+  it.possible.show <- rbind(
+    if(is.data.table(prev.not.best) && nrow(prev.not.best))data.table(
+      computed="previously", prev.not.best),
+    if(!is.null(it.possible))data.table(
+      computed="this step", it.possible))
+  (it.splits.dt <- rbind(
+    if(!is.null(prev$best.split))prev.not.best,
+    if(!is.null(it.possible))it.possible[, {
+      .SD[which.min(loss_diff)]
+    }, by=.(full_seg_start, full_seg_end)]))
+  it.best.i <- which.min(it.splits.dt$loss_diff)
+  it.best <- it.splits.dt[it.best.i]
+  it.best.tall <- get_segs(it.best)
+  it.segs.dt <- rbind(
+    if(!is.null(prev$best.split))prev$segments[
+      !it.best, on=c(start="full_seg_start", end="full_seg_end")
+    ][, computed := "previously"],
+    data.table(computed="this step", it.best.tall))
+  list(
+    to.split=it.best.tall[, .(start, end)],#prev.best.tall
+    segments=it.segs.dt,  #prev.segs.dt
+    splits=it.splits.dt,  #prev.splits.dt
+    possible=it.possible.show[, .(before_seg_end, loss_diff, computed)],
+    best.split=it.best.i) #prev.best.i
+}
+plot.split <- function(it){
+  it.vlines <- get_vlines(it$segments)
+  computed.colors <- c(
+    "this step"="red",
+    "previously"="deepskyblue")
+  prev.vlines <- it.vlines[computed=="previously"]
+  gg <- ggplot()+
+    ggtitle(sprintf(
+      "Need to compute cost of %d new split(s) to find change #%d in %d data",
+      it$possible[, sum(computed=="this step")],
+      nrow(it$segments)-1,
+      nrow(count.dt)))+
+    facet_grid(panel ~ ., scales="free")+
+    scale_color_manual(
+      values=computed.colors,
+      drop=FALSE,
+      breaks=names(computed.colors))+
+    scale_x_continuous(
+      "data.i (position/index in data sequence)",
+      limits=c(0, nrow(count.dt)+1))+
+    scale_y_continuous(
+      "",
+      labels=scales::scientific)+
+    geom_point(aes(
+      position, count),
+      shape=21,
+      data=data.table(panel="data", count.dt))+
+    geom_point(aes(
+      before_seg_end+0.5, loss_diff, color=computed),
+      shape=1,
+      data=data.table(panel="loss difference", it$possible))+
+    geom_vline(aes(
+      xintercept=start-0.5,
+      color=computed),
+      data=it.vlines[computed=="this step"])+
+    geom_segment(aes(
+      start-0.5, mean,
+      color=computed,
+      xend=end+0.5, yend=mean),
+      size=2,
+      alpha=0.5,
+      data=data.table(panel="data", it$segments))
+  if(nrow(prev.vlines)){
+    gg <- gg+
+  geom_vline(aes(
+    xintercept=start-0.5,
+    color=computed),
+    data=data.table(
+      panel="data",
+      prev.vlines
+    ))
+  }
+  gg
+}
+
+bs.iterations <- list(bs.initial)
+for(n.segments in 2:nrow(count.dt)){
+  bs.iterations[[n.segments]] <- next.split(bs.iterations[[n.segments-1]])
+}
+
+plot.split(bs.iterations[[2]])
+plot.split(bs.iterations[[3]])
+plot.split(bs.iterations[[4]])
+
+```
+
+## Other distributional assumptions
+
+Above we have mainly discussed the normal model with change in mean
+(and constant variance). However the binary segmentation algorithm is
+much more widely applicable to other statistical models and data. For
+example, consider the wave data below TODO.
+
+```{r}
+data(wave.c44137, package="changepoint")
+wave.dt <- data.table(height=wave.c44137)
+## The data are taken at hourly intervals from January 2005 until
+## September 2012.
+ggplot()+
+  geom_line(aes(
+    seq_along(height), height),
+    data=wave.dt)
+```
+
+## Complexity analysis
+
+- Assume $n$ data and $K$ segments.
+- Computing best loss decrease and split point for a segment with $t$
+  data takes $O(t)$ time.
+- Keep a list of segments which could be split, sorted by loss
+  decrease values.
+- Best case is when segments get cut in half each time, $O(n \log K)$
+  time. (minimize number of possible splits for which we have to recompute loss)
+- Worst case is when splits are very unequal (1, $t-1$), $O(n K)$
+  time. (maximize number of possible splits for which we have to
+  recompute loss)
+
+## Possible exam questions
+
+- Explain in detail one similarity and one difference between binary
+  segmentation and k-means. (gaussian mixture models, hierarchical
+  clustering)
+- For a sequence of $n=10$ data, we need to compute the loss for each
+  of the 9 possible splits in the first iteration of binary
+  segmentation. What is the number of splits for which we must compute
+  the loss in the second step? (best and worst case)
